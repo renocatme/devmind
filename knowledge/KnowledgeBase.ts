@@ -15,6 +15,7 @@ import {
   QueryFilter,
 } from './types';
 import { DocumentLoader } from './DocumentLoader';
+import fs from 'fs';
 
 // ============================================
 // KNOWLEDGE BASE
@@ -443,6 +444,43 @@ export class KnowledgeBase {
 
     for (const [id, corpus] of data.corpora) {
       this.corpora.set(id, corpus);
+    }
+  }
+
+  /**
+   * Export embeddings and auxiliary index data to disk (JSON).
+   * This saves `embeddings` and `invertedIndex` for faster reloads.
+   */
+  exportIndex(filePath: string): void {
+    const payload = {
+      embeddings: Array.from(this.index.embeddings.entries()),
+      invertedIndex: Array.from(this.index.invertedIndex.entries()).map(([k, s]) => [k, Array.from(s)]),
+    };
+
+    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf-8');
+  }
+
+  /**
+   * Import embeddings and index from disk. Does not modify documents/corpora.
+   */
+  importIndex(filePath: string): void {
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Index file not found: ${filePath}`);
+    }
+
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const data = JSON.parse(raw);
+
+    if (data.embeddings && Array.isArray(data.embeddings)) {
+      this.index.embeddings = new Map(data.embeddings as Array<[string, number[]]>);
+    }
+
+    if (data.invertedIndex && Array.isArray(data.invertedIndex)) {
+      const map = new Map<string, Set<string>>();
+      for (const [token, arr] of data.invertedIndex as Array<[string, string[]]>) {
+        map.set(token, new Set(arr));
+      }
+      this.index.invertedIndex = map;
     }
   }
 

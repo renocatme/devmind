@@ -17,6 +17,8 @@ import {
   WebContainerEventHandler,
   WebContainerRuntimeOptions,
 } from './types';
+import { ProcessMonitor } from './processMonitor';
+import { validateCOEP } from './serverUtils';
 
 // ============================================
 // WEBCONTAINER RUNTIME CLASS
@@ -37,6 +39,9 @@ export class WebContainerRuntime {
   private options: WebContainerRuntimeOptions;
   private processCounter = 0;
   private sessionCounter = 0;
+  private processHandles: Map<string, WebContainerProcess> = new Map();
+  private processMonitor = new ProcessMonitor();
+  private packageCache: Map<string, { success: boolean; timestamp: number; output: string }> = new Map();
 
   private constructor(options: WebContainerRuntimeOptions = {}) {
     this.options = options;
@@ -73,14 +78,43 @@ export class WebContainerRuntime {
     }
 
     try {
-      this.state.instance = await WebContainer.boot({
+      // Validate COEP option
+      const coep = this.options.coep || 'credentialless';
+      if (coep !== 'credentialless' && coep !== 'require-corp') {
+        throw new Error(`Invalid COEP option: ${String(coep)}`);
+      }
+
+      const bootOpts = {
         workdirName: this.options.workdirName || 'workspace',
-        coep: this.options.coep || 'credentialless',
-      });
+        coep,
+      } as any;
+
+      const bootPromise = (WebContainer as any).boot(bootOpts);
+
+      const timeoutMs = this.options.bootTimeout ?? 30000;
+      const timeoutPromise = new Promise((_, rej) => setTimeout(() => rej(new Error('WebContainer boot timeout')), timeoutMs));
+
+      this.state.instance = await Promise.race([bootPromise, timeoutPromise]);
 
       // Listen for server-ready events
-      this.state.instance.on('server-ready', (port, url) => {
+      this.state.instance.on('server-ready', async (port, url) => {
         this.state.servers.set(port, { port, url, ready: true });
+        // best-effort: check server headers for COOP/COEP
+        try {
+          if (validateCOEP(this.options.coep)) {
+            try {
+              const res = await fetch(url, { method: 'GET' as any });
+              const coop = res.headers.get('cross-origin-opener-policy');
+              const coepHeader = res.headers.get('cross-origin-embedder-policy');
+              if (!coop || !coepHeader) {
+                this.emit({ type: 'error', message: `Server at ${url} missing COOP/COEP headers` });
+              }
+            } catch {
+              // ignore network errors
+            }
+          }
+        } catch {}
+
         this.emit({ type: 'server-ready', port, url });
       });
 
@@ -88,7 +122,7 @@ export class WebContainerRuntime {
       this.emit({ type: 'boot', success: true });
       return true;
     } catch (error) {
-      this.emit({ type: 'error', message: `Boot failed: ${error}` });
+      this.emit({ type: 'error', message: `Boot failed: ${String(error)}` });
       this.emit({ type: 'boot', success: false });
       return false;
     }
@@ -96,13 +130,30 @@ export class WebContainerRuntime {
 
   async teardown(): Promise<void> {
     // Kill all processes
-    for (const [id] of this.state.processes) {
-      await this.killProcess(id);
+    for (const [id] of Array.from(this.state.processes.keys())) {
+      try {
+        await this.killProcess(id);
+      } catch {
+        // best-effort
+      }
     }
 
     // Close all terminal sessions
-    for (const [id] of this.state.terminalSessions) {
-      await this.closeTerminalSession(id);
+    for (const [id] of Array.from(this.state.terminalSessions.keys())) {
+      try {
+        await this.closeTerminalSession(id);
+      } catch {
+        // best-effort
+      }
+    }
+
+    // Attempt to gracefully destroy underlying instance if supported
+    try {
+      if (this.state.instance && typeof (this.state.instance as any).destroy === 'function') {
+        await (this.state.instance as any).destroy();
+      }
+    } catch {
+      // ignore
     }
 
     this.state = {
@@ -112,6 +163,14 @@ export class WebContainerRuntime {
       servers: new Map(),
       terminalSessions: new Map(),
     };
+
+    // Clear event handlers
+    this.eventHandlers.clear();
+    // Clear monitors and handles
+    try {
+      this.processMonitor.clearAll();
+    } catch {}
+    this.processHandles.clear();
   }
 
   isBooted(): boolean {
@@ -227,10 +286,22 @@ export class WebContainerRuntime {
     };
 
     this.state.processes.set(processId, processInfo);
+    // keep a handle to the actual webcontainer process for kill/resize
+    this.processHandles.set(processId, process);
     this.emit({ type: 'process-start', processId, command: `${command} ${args.join(' ')}` });
 
     // Handle output
     this.handleProcessOutput(processId, process);
+
+    // Register with process monitor (if timeout provided)
+    try {
+      const timeout = options.timeoutMs ?? 0;
+      if (timeout && timeout > 0) {
+        this.processMonitor.register(processId, process as any, timeout, (id) => {
+          this.emit({ type: 'error', message: `Process ${id} timed out and was killed` });
+        });
+      }
+    } catch {}
 
     // Handle exit
     process.exit.then(exitCode => {
@@ -239,6 +310,8 @@ export class WebContainerRuntime {
         info.status = 'exited';
         info.exitCode = exitCode;
       }
+      try { this.processMonitor.unregister(processId); } catch {}
+      if (this.processHandles.has(processId)) this.processHandles.delete(processId);
       this.emit({ type: 'process-exit', processId, exitCode });
     });
 
@@ -273,10 +346,23 @@ export class WebContainerRuntime {
 
   async killProcess(processId: string): Promise<void> {
     const info = this.state.processes.get(processId);
+    const handle = this.processHandles.get(processId);
+    if (handle && typeof (handle as any).kill === 'function') {
+      try {
+        (handle as any).kill();
+      } catch {
+        // ignore
+      }
+    }
+
     if (info) {
       info.status = 'exited';
       info.exitCode = -1;
       this.state.processes.delete(processId);
+    }
+
+    if (this.processHandles.has(processId)) {
+      this.processHandles.delete(processId);
     }
   }
 
@@ -356,19 +442,19 @@ export class WebContainerRuntime {
   // ============================================
   // PACKAGE MANAGEMENT
   // ============================================
-
-  async installPackages(packages: string[]): Promise<{ success: boolean; output: string }> {
-    this.ensureBooted();
-
+  private async performInstall(packages: string[], timeoutMs: number): Promise<{ success: boolean; output: string }> {
     const output: string[] = [];
-    const processId = await this.spawn('npm', ['install', ...packages]);
+    const processId = await this.spawn('npm', ['install', ...packages], { timeoutMs });
 
     return new Promise(resolve => {
+      let resolved = false;
       const handler = (event: WebContainerEvent) => {
         if (event.type === 'process-output' && event.processId === processId) {
           output.push(event.output.data);
         }
         if (event.type === 'process-exit' && event.processId === processId) {
+          if (resolved) return;
+          resolved = true;
           this.removeEventHandler(handler);
           resolve({
             success: event.exitCode === 0,
@@ -376,8 +462,40 @@ export class WebContainerRuntime {
           });
         }
       };
+
+      const timeoutId = setTimeout(async () => {
+        if (resolved) return;
+        resolved = true;
+        try {
+          await this.killProcess(processId);
+        } catch {}
+        this.removeEventHandler(handler);
+        resolve({ success: false, output: output.join('') + '\n[timeout]' });
+      }, timeoutMs);
+
       this.addEventHandler(handler);
     });
+  }
+
+  async installPackages(packages: string[], retries = 1): Promise<{ success: boolean; output: string }> {
+    this.ensureBooted();
+
+    const key = packages.join(',');
+    const cache = this.packageCache.get(key);
+    const cacheTTL = 1000 * 60 * 60; // 1 hour
+    if (cache && Date.now() - cache.timestamp < cacheTTL) {
+      return { success: cache.success, output: cache.output + '\n[cached]' };
+    }
+
+    const timeoutMs = this.options.packageInstallTimeout ?? 120000;
+    let last: { success: boolean; output: string } = { success: false, output: '' };
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      last = await this.performInstall(packages, timeoutMs);
+      if (last.success) break;
+    }
+
+    this.packageCache.set(key, { success: last.success, timestamp: Date.now(), output: last.output });
+    return last;
   }
 
   async runNpmScript(script: string): Promise<{ success: boolean; output: string }> {

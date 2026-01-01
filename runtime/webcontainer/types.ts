@@ -49,6 +49,7 @@ export interface SpawnOptions {
     cols: number;
     rows: number;
   };
+  timeoutMs?: number;
 }
 
 // ============================================
@@ -107,4 +108,6 @@ export interface WebContainerRuntimeOptions {
   workdirName?: string;
   coep?: 'require-corp' | 'credentialless';
   onEvent?: WebContainerEventHandler;
+  bootTimeout?: number;
+  packageInstallTimeout?: number;
 }
