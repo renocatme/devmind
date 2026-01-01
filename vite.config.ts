@@ -13,6 +13,9 @@ export default defineConfig(({ mode }) => {
       cors: true,
       headers: {
         'X-Frame-Options': 'ALLOWALL',
+        // Required for WebContainer API
+        'Cross-Origin-Embedder-Policy': 'credentialless',
+        'Cross-Origin-Opener-Policy': 'same-origin',
       },
     },
     plugins: [react()],
@@ -23,7 +26,13 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+        '@sdk': path.resolve(__dirname, 'sdk'),
+        '@knowledge': path.resolve(__dirname, 'knowledge'),
+        '@runtime': path.resolve(__dirname, 'runtime'),
       }
-    }
+    },
+    optimizeDeps: {
+      exclude: ['@webcontainer/api'],
+    },
   };
 });
