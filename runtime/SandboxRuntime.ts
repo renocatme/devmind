@@ -13,7 +13,7 @@ export class SandboxRuntime {
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
-    this.storagePrefix = `devmind_${sessionId}`;
+    this.storagePrefix = `project_${sessionId}`;
   }
 
   private getKey(key: string): string {

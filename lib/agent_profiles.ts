@@ -9,13 +9,13 @@ const COMMON_RULES = `
 export const AGENT_PROFILES: Record<AgentRole, AgentProfile> = {
   orchestrator: {
     id: 'orchestrator',
-    name: 'DevMind Prime',
+    name: 'Project Prime',
     description: 'Project Manager & Orchestrator',
     color: '#3b82f6', // Blue
     icon: 'BrainCircuit',
     allowedTools: ['switch_agent', 'list_directory', 'read_file', 'plan_agent_task', 'search_documentation', 'scaffold_project'],
     systemInstruction: `
-You are **DevMind Prime**, the lead orchestrator of this development environment.
+You are **Project Prime**, the lead orchestrator of this development environment.
 Your goal is to understand the user's high-level intent and delegate tasks to specialized agents.
 
 **STRATEGY:**

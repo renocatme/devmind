@@ -24,6 +24,7 @@ export interface DocumentMetadata {
   language?: string;
   tags?: string[];
   provider?: string;
+  scope?: 'platform' | 'project';
   source?: string;
   lastModified?: number;
   size?: number;
@@ -78,6 +79,7 @@ export interface QueryFilter {
   tags?: string[];
   paths?: string[];
   providers?: string[];
+  scope?: 'platform' | 'project';
   dateRange?: {
     start?: number;
     end?: number;

@@ -23,6 +23,7 @@ interface AgentServiceConfig {
   model?: string;
   thinkingBudget?: number;
   knowledgeBase?: KnowledgeBase;
+  concurrencyLimit?: number;
 }
 
 interface SendMessageCallbacks {
@@ -40,6 +41,7 @@ export class AgentService {
   private client: LLMClient;
   private model: string;
   private knowledgeBase?: KnowledgeBase;
+  private concurrencyLimit: number;
 
   constructor(config: AgentServiceConfig) {
     this.client = new LLMClient(
@@ -47,6 +49,7 @@ export class AgentService {
     );
     this.model = config.model || 'gemini-3-pro-preview';
     this.knowledgeBase = config.knowledgeBase;
+    this.concurrencyLimit = config.concurrencyLimit || 3;
   }
 
   // ============================================
@@ -324,14 +327,25 @@ export class AgentService {
         .pop();
 
       if (lastUserMessage?.text) {
-        const ragResult = this.knowledgeBase.query({
+        // Prefer project-scoped docs first, fall back to platform-scoped or any docs
+        const projectResult = this.knowledgeBase.query({
           query: lastUserMessage.text,
           topK: 3,
           includeContent: true,
+          filter: { scope: 'project' },
         });
 
-        if (ragResult.documents.length > 0) {
-          systemPrompt += `\n\n## Relevant Context\n${ragResult.context}`;
+        if (projectResult.documents.length > 0) {
+          systemPrompt += `\n\n## Relevant Context\n${projectResult.context}`;
+        } else {
+          const fallback = this.knowledgeBase.query({
+            query: lastUserMessage.text,
+            topK: 3,
+            includeContent: true,
+          });
+          if (fallback.documents.length > 0) {
+            systemPrompt += `\n\n## Relevant Context\n${fallback.context}`;
+          }
         }
       }
     }
@@ -361,6 +375,50 @@ export class AgentService {
 
   getKnowledgeBase(): KnowledgeBase | undefined {
     return this.knowledgeBase;
+  }
+
+  // ============================================
+  // PARALLEL AGENT EXECUTION
+  // ============================================
+
+  async runParallelAgents(
+    messages: Message[],
+    context: AgentContext,
+    profiles: AgentProfile[],
+    onSwitchAgent: (role: AgentRole, reason: string) => Promise<string>,
+    callbacksPerAgent?: Record<string, SendMessageCallbacks>,
+    options?: { concurrency?: number }
+  ): Promise<Record<string, string>> {
+    const concurrency = options?.concurrency || this.concurrencyLimit || 3;
+
+    const results: Record<string, string> = {};
+    const queue = [...profiles];
+
+    const worker = async () => {
+      while (true) {
+        const profile = queue.shift();
+        if (!profile) break;
+
+        const callbacks = callbacksPerAgent?.[profile.id] || {
+          onStream: (_: string) => {},
+          onToolStart: (_: ToolCall) => {},
+          onToolEnd: (_: string, __: string) => {},
+          onThinking: (_: string) => {},
+        };
+
+        try {
+          const resp = await this.sendMessage(messages, context, profile, onSwitchAgent, callbacks);
+          results[profile.id] = resp;
+        } catch (e) {
+          results[profile.id] = `Error: ${e instanceof Error ? e.message : String(e)}`;
+        }
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(concurrency, profiles.length) }, () => worker());
+    await Promise.all(workers);
+
+    return results;
   }
 }
 

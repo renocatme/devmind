@@ -12,7 +12,7 @@ export const getInitialFileSystem = (): FileNode => ({
     {
       name: 'README.md',
       type: 'file',
-      content: '# DevMind Workspace\n\nThis is a virtual workspace for your AI Agent.\nAsk the agent to create projects, debug code, or explain concepts.'
+      content: '# Project Workspace\n\nThis is a virtual workspace for your AI Agent.\nAsk the agent to create projects, debug code, or explain concepts.'
     },
     {
       name: 'src',
@@ -21,14 +21,14 @@ export const getInitialFileSystem = (): FileNode => ({
         {
           name: 'main.py',
           type: 'file',
-          content: 'print("Hello from DevMind!")'
+          content: 'print("Hello from the project agent!")'
         }
       ]
     },
     {
       name: 'package.json',
       type: 'file',
-      content: JSON.stringify({ name: "devmind-project", version: "1.0.0" }, null, 2)
+      content: JSON.stringify({ name: "project-sample", version: "1.0.0" }, null, 2)
     }
   ],
 });
@@ -58,14 +58,14 @@ export const MODE_INSTRUCTIONS: Record<InputMode, string> = {
 // ============================================
 
 export const SYSTEM_INSTRUCTION = `
-You are DevMind, an elite AI Development Engineer and Autonomous Agent.
+You are an AI Development Engineer and Autonomous Agent.
 Your goal is to build, debug, analyze, and orchestrate complex software projects.
 
 **RUNTIME ENVIRONMENT:**
 - You are running in an **ISOLATED SANDBOX**.
 - The file system is virtual and ephemeral.
 - You have full root access to this sandbox.
-- Your environment is completely separate from the DevMind Core system.
+- Your environment is completely separate from any core system.
 
 **CRITICAL OPERATING RULES:**
 

@@ -1,0 +1,2 @@
+{"id":"k_setup","text":"Project setup steps including pnpm install and run dev","metadata":{"title":"Project Setup","type":"how-to","tags":["setup"]}}
+{"id":"k_troubleshoot","text":"Common troubleshooting tips: WebContainer boot errors, SDK errors","metadata":{"title":"Troubleshooting","type":"troubleshooting","tags":["errors"]}}

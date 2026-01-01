@@ -1,12 +1,17 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { Terminal as XTerm } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 
 interface TerminalProps {
   lines: string[];
+  searchQuery?: string;
 }
 
-const Terminal: React.FC<TerminalProps> = ({ lines }) => {
+export type TerminalHandle = {
+  scrollToLine: (lineIndex: number) => void;
+};
+
+const Terminal = forwardRef<TerminalHandle, TerminalProps>(({ lines, searchQuery }, ref) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -34,7 +39,7 @@ const Terminal: React.FC<TerminalProps> = ({ lines }) => {
     term.open(terminalRef.current);
     fitAddon.fit();
 
-    term.writeln('\x1b[1;32mDevMind Agent Terminal v1.0.0\x1b[0m');
+    term.writeln('\x1b[1;32mAgent Terminal v1.0.0\x1b[0m');
     term.writeln('Sandbox Environment Initialized.');
     term.write('$ ');
 
@@ -50,54 +55,73 @@ const Terminal: React.FC<TerminalProps> = ({ lines }) => {
     };
   }, []);
 
-  // Handle Incoming Lines
-  useEffect(() => {
-    if (!xtermRef.current) return;
-    
-    // We only print the *last* line added if we want to avoid re-printing history,
-    // but React effects run on change. 
-    // A better approach for a terminal log is to just print what's new.
-    // However, for this simplified component, we can clear and reprint OR check diff.
-    // Let's assume the parent passes specific "new lines" via an event or we just
-    // write the last one if it's new.
-    
-    // Hack: Just write the last line if it exists and differs? 
-    // Better: The parent `lines` array grows. We keep track of printed index.
-  }, [lines]);
-
   // Use a ref to track printed index
   const lastPrintedIndex = useRef(0);
   useEffect(() => {
       if(!xtermRef.current) return;
+     const newLines = lines.slice(lastPrintedIndex.current);
+     if (newLines.length > 0) {
+      // Clear the prompt line (mock)
+      xtermRef.current.write('\r\x1b[K'); 
+
+      // Use searchQuery prop for highlighting (passed from wrapper)
+      let q = searchQuery || '';
+
+      const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
+
+      newLines.forEach(line => {
+          let outLine = line;
+          if (q) {
+            try {
+              const re = new RegExp(escapeRegex(q), 'ig');
+              // ANSI highlight background yellow with black text
+              outLine = outLine.replace(re, (m) => `\x1b[30;43m${m}\x1b[0m`);
+            } catch {}
+          }
+
+          if (outLine.startsWith('>')) {
+            xtermRef.current?.writeln(`\x1b[34m${outLine}\x1b[0m`);
+          } else if (outLine.startsWith('$')) {
+            xtermRef.current?.writeln(`\x1b[33m${outLine}\x1b[0m`);
+          } else if (outLine.toLowerCase().includes('error')) {
+            xtermRef.current?.writeln(`\x1b[31m${outLine}\x1b[0m`);
+          } else if (outLine.toLowerCase().includes('success')) {
+            xtermRef.current?.writeln(`\x1b[32m${outLine}\x1b[0m`);
+          } else {
+            xtermRef.current?.writeln(outLine);
+          }
+      });
       
-      const newLines = lines.slice(lastPrintedIndex.current);
-      if (newLines.length > 0) {
-          // Clear the prompt line (mock)
-          xtermRef.current.write('\r\x1b[K'); 
-          
-          newLines.forEach(line => {
-              if (line.startsWith('>')) {
-                  // Command/Info
-                   xtermRef.current?.writeln(`\x1b[34m${line}\x1b[0m`);
-              } else if (line.startsWith('$')) {
-                  // User/Agent execution
-                   xtermRef.current?.writeln(`\x1b[33m${line}\x1b[0m`);
-              } else if (line.toLowerCase().includes('error')) {
-                   xtermRef.current?.writeln(`\x1b[31m${line}\x1b[0m`);
-              } else if (line.toLowerCase().includes('success')) {
-                   xtermRef.current?.writeln(`\x1b[32m${line}\x1b[0m`);
-              } else {
-                   xtermRef.current?.writeln(line);
-              }
-          });
-          
-          xtermRef.current.write('$ ');
-          lastPrintedIndex.current = lines.length;
-          fitAddonRef.current?.fit();
-      }
+      xtermRef.current.write('$ ');
+      lastPrintedIndex.current = lines.length;
+      fitAddonRef.current?.fit();
+     }
   }, [lines]);
 
-  return <div className="h-full w-full overflow-hidden" ref={terminalRef} />;
-};
+  useImperativeHandle(ref, () => ({
+    scrollToLine: (lineIndex: number) => {
+      const term = xtermRef.current;
+      if (!term) return;
 
+      try {
+        const buf = (term as any).buffer?.active;
+        if (!buf) return;
+        const rows = (term as any).rows || 12;
+        const base = buf.base || 0;
+        const delta = Math.floor(lineIndex - base - rows / 2);
+        if (typeof term.scrollLines === 'function') {
+          term.scrollLines(delta);
+        } else if (typeof (term as any).scrollToBottom === 'function' && delta > 0) {
+          (term as any).scrollToBottom();
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+  }));
+
+  return <div className="h-full w-full overflow-hidden" ref={terminalRef} />;
+});
+
+Terminal.displayName = 'Terminal';
 export default Terminal;

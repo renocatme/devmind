@@ -6,11 +6,13 @@ import { SidePanel } from './SidePanel';
 import StatusBar from './StatusBar';
 import CodeEditor from '../CodeEditor';
 import Terminal from '../Terminal';
+import CliTerminalWrapper from '../CliTerminalWrapper';
 import ChatInterface from '../chat/ChatInterface';
 import PreviewPane from '../PreviewPane';
 import { AgentBadge } from './AgentBadge';
 import { clsx } from 'clsx';
-import { PanelRightClose, PanelRightOpen, Terminal as TerminalIcon, X, Maximize2, Minimize2, Code2, LayoutTemplate } from 'lucide-react';
+import { PanelRightClose, PanelRightOpen, Terminal as TerminalIcon, X, Maximize2, Minimize2, Code2, LayoutTemplate, Settings } from 'lucide-react';
+import LLMConfigPanel from './LLMConfigPanel';
 import { readFileNode, writeFileNode } from '../../services/virtualFileSystem';
 
 export default function Workbench() {
@@ -22,6 +24,7 @@ export default function Workbench() {
     const [bottomPanelOpen, setBottomPanelOpen] = useState(true);
     const [activeActivity, setActiveActivity] = useState<'files' | 'git' | 'search'>('files');
     const [rightTab, setRightTab] = useState<'chat' | 'preview'>('chat');
+    const [llmPanelOpen, setLlmPanelOpen] = useState(false);
 
     // Editor State
     const [activeFile, setActiveFile] = useState<string | null>(null);
@@ -111,7 +114,7 @@ export default function Workbench() {
                                     <Code2 size={40} className="opacity-20" />
                                 </div>
                                 <div className="text-center">
-                                    <p className="font-medium text-sm text-neutral-400">DevMind Omni-Engine</p>
+                                    <p className="font-medium text-sm text-neutral-400">Omni-Engine</p>
                                     <p className="text-xs text-neutral-600 mt-1">Select a file or ask the agent to scaffold.</p>
                                 </div>
                             </div>
@@ -130,7 +133,7 @@ export default function Workbench() {
                         </div>
                         {bottomPanelOpen && (
                             <div className="flex-1 p-1">
-                                <Terminal lines={terminalLines} />
+                                <CliTerminalWrapper />
                             </div>
                         )}
                     </div>
@@ -153,12 +156,15 @@ export default function Workbench() {
                              >
                                  Live Preview
                              </button>
+                             <button onClick={() => setLlmPanelOpen(v => !v)} className="p-1.5 text-neutral-500 hover:text-white hover:bg-[#27272a] rounded-md transition-colors" title="LLM Settings"><Settings size={14} /></button>
                              <button onClick={() => setRightPanelOpen(false)} className="p-1.5 text-neutral-500 hover:text-white hover:bg-red-900/20 rounded-md transition-colors"><X size={14}/></button>
                          </div>
 
                          {/* Right Panel Content */}
                          <div className="flex-1 overflow-hidden relative">
-                             {rightTab === 'chat' ? (
+                             {llmPanelOpen ? (
+                                 <LLMConfigPanel />
+                             ) : rightTab === 'chat' ? (
                                  <div className="h-full flex flex-col">
                                      <div className="px-4 py-2 border-b border-[#27272a] bg-[#0c0c0e]">
                                          <AgentBadge profile={activeProfile} />

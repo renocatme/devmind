@@ -19,6 +19,8 @@ import { validateConfig } from './config';
 import { LLMError, normalizeError } from './errors';
 import { GeminiProvider, OpenAIProvider, AnthropicProvider, OllamaProvider } from './providers';
 import { StreamProcessor } from './utils/streaming';
+import { CombinedRateLimiter } from './utils/rate-limit';
+import { CircuitBreaker } from './utils/retry';
 
 // ============================================
 // LLM CLIENT
@@ -28,6 +30,11 @@ export class LLMClient {
   private providers: Map<ProviderName, LLMProvider> = new Map();
   private activeProvider: LLMProvider;
   private config: ClientConfig;
+  private concurrencyLimit: number;
+  private activeRequests = 0;
+  private requestQueue: Array<() => void> = [];
+  private providerLimiters: Map<ProviderName, CombinedRateLimiter> = new Map();
+  private providerCircuitBreakers: Map<ProviderName, CircuitBreaker> = new Map();
 
   constructor(config: ClientConfig) {
     // Validate configuration
@@ -37,6 +44,9 @@ export class LLMClient {
     }
 
     this.config = config;
+    // Concurrency limit can be provided via config.concurrencyLimit (optional)
+    // without changing the public ClientConfig type.
+    this.concurrencyLimit = (config as any).concurrencyLimit || 5;
     this.initializeProviders();
     
     // Set default provider
@@ -91,10 +101,42 @@ export class LLMClient {
         }
 
         this.providers.set(providerConfig.name, provider);
+        // Initialize per-provider rate limiters if configured
+        if (providerConfig.rateLimit) {
+          this.providerLimiters.set(
+            providerConfig.name,
+            new CombinedRateLimiter(providerConfig.rateLimit)
+          );
+        }
+        // Initialize circuit breaker per provider (defaults)
+        this.providerCircuitBreakers.set(
+          providerConfig.name,
+          new CircuitBreaker(
+            (providerConfig as any).circuitBreaker?.failureThreshold || 5,
+            (providerConfig as any).circuitBreaker?.resetTimeoutMs || 60000
+          )
+        );
       } catch (error) {
         console.error(`Failed to initialize provider ${providerConfig.name}:`, error);
       }
     }
+  }
+
+  // SIMPLE SEMAPHORE FOR CONCURRENCY CONTROL
+  private async acquireSlot(): Promise<void> {
+    if (this.activeRequests < this.concurrencyLimit) {
+      this.activeRequests++;
+      return;
+    }
+
+    await new Promise<void>(resolve => this.requestQueue.push(resolve));
+    this.activeRequests++;
+  }
+
+  private releaseSlot(): void {
+    this.activeRequests = Math.max(0, this.activeRequests - 1);
+    const next = this.requestQueue.shift();
+    if (next) next();
   }
 
   // ============================================
@@ -137,11 +179,34 @@ export class LLMClient {
   // ============================================
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    return this.activeProvider.chat(request);
+    await this.acquireSlot();
+    try {
+      const limiter = this.providerLimiters.get(this.getActiveProviderName());
+      if (limiter) await limiter.acquire(request.maxTokens);
+      const cb = this.providerCircuitBreakers.get(this.getActiveProviderName());
+      if (cb) {
+        return await cb.execute(() => this.activeProvider.chat(request));
+      }
+      return await this.activeProvider.chat(request);
+    } finally {
+      this.releaseSlot();
+    }
   }
 
   async chatWith(provider: ProviderName, request: ChatRequest): Promise<ChatResponse> {
-    return this.getProvider(provider).chat(request);
+    await this.acquireSlot();
+    try {
+      const p = this.getProvider(provider);
+      const limiter = this.providerLimiters.get(provider);
+      if (limiter) await limiter.acquire(request.maxTokens);
+      const cb = this.providerCircuitBreakers.get(provider);
+      if (cb) {
+        return await cb.execute(() => p.chat(request));
+      }
+      return await p.chat(request);
+    } finally {
+      this.releaseSlot();
+    }
   }
 
   // ============================================
@@ -149,14 +214,31 @@ export class LLMClient {
   // ============================================
 
   async *stream(request: ChatRequest): AsyncGenerator<StreamChunk> {
-    yield* this.activeProvider.stream(request);
+    await this.acquireSlot();
+    try {
+      const limiter = this.providerLimiters.get(this.getActiveProviderName());
+      if (limiter) await limiter.acquire(request.maxTokens);
+      const cb = this.providerCircuitBreakers.get(this.getActiveProviderName());
+      // For streaming, avoid wrapping generator in circuit breaker; rely on rate limiter and concurrency
+      yield* this.activeProvider.stream(request);
+    } finally {
+      this.releaseSlot();
+    }
   }
 
   async *streamWith(
     provider: ProviderName,
     request: ChatRequest
   ): AsyncGenerator<StreamChunk> {
-    yield* this.getProvider(provider).stream(request);
+    await this.acquireSlot();
+    try {
+      const limiter = this.providerLimiters.get(provider);
+      if (limiter) await limiter.acquire(request.maxTokens);
+      // For streaming, avoid wrapping generator in circuit breaker; rely on rate limiter and concurrency
+      yield* this.getProvider(provider).stream(request);
+    } finally {
+      this.releaseSlot();
+    }
   }
 
   async streamWithCallbacks(
@@ -164,7 +246,6 @@ export class LLMClient {
     options: StreamOptions
   ): Promise<ChatResponse> {
     const processor = new StreamProcessor(options);
-    
     try {
       for await (const chunk of this.stream(request)) {
         if (options.signal?.aborted) {

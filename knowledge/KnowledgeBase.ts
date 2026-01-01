@@ -278,6 +278,13 @@ export class KnowledgeBase {
         }
       }
 
+      if (filter.scope) {
+        const docScope = (doc.metadata as any).scope as string | undefined;
+        if (filter.scope && docScope !== filter.scope) {
+          return false;
+        }
+      }
+
       if (filter.dateRange) {
         const modified = doc.metadata.lastModified || 0;
         if (filter.dateRange.start && modified < filter.dateRange.start) {

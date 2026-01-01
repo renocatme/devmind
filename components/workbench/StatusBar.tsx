@@ -33,7 +33,7 @@ const StatusBar: React.FC<StatusBarProps> = ({ sessionId, activeFile, fileLangua
              )}
             <div className="flex items-center gap-2 hover:bg-white/20 px-1 rounded cursor-pointer transition-colors">
                 <Wifi size={10} />
-                <span>DevMind Connected</span>
+                <span>Connected</span>
             </div>
             <Bell size={10} className="cursor-pointer hover:text-white/80" />
         </div>

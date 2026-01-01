@@ -3,7 +3,7 @@ import { SandboxRuntime } from '../runtime/SandboxRuntime';
 import { FileSystemState, Package, AgentContext, TerminalLineType } from '../types';
 import { getInitialFileSystem } from '../constants';
 
-const INITIAL_TERMINAL_MESSAGE = '\x1b[1;32mDevMind Runtime Initialized\x1b[0m';
+const INITIAL_TERMINAL_MESSAGE = '\x1b[1;32mRuntime Initialized\x1b[0m';
 
 export const useSandbox = (sessionId: string) => {
     const runtime = useMemo(() => new SandboxRuntime(sessionId), [sessionId]);

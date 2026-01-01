@@ -38,8 +38,8 @@ interface SessionContextType {
 // ============================================
 
 const STORAGE_KEYS = {
-  SESSION_ID: 'devmind_sid',
-  MESSAGES: (id: string) => `devmind_${id}_msgs`,
+  SESSION_ID: 'project_sid',
+  MESSAGES: (id: string) => `project_${id}_msgs`,
 } as const;
 
 const generateSessionId = () => `session_${Math.random().toString(36).substring(2, 11)}`;
@@ -47,7 +47,7 @@ const generateSessionId = () => `session_${Math.random().toString(36).substring(
 const createInitialMessage = (): Message => ({
   id: 'init',
   sender: Sender.AI,
-  text: "DevMind ready. How can I help?",
+  text: "Ready. How can I help?",
   timestamp: Date.now()
 });
 
